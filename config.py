@@ -53,6 +53,10 @@ PATH_REPLAN_LOOKAHEAD_DISTANCE = 4.0
 # After an early replan, wait this many scans before triggering another one.
 PATH_REPLAN_COOLDOWN_SCANS = 15
 
+# While a blocked original path is being replanned, keep moving forward slowly
+# instead of stopping or following the blocked path.
+REPLAN_STRAIGHT_SPEED = 0.08
+
 # Half-angle of the front danger zone, in radians.
 # 0.785 rad is 45 degrees on each side, 90 degrees total.
 FRONT_DETECTION_ANGLE = 0.685

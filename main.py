@@ -30,6 +30,7 @@ from .config import (
     FRONT_OBSTACLE_STOP_DISTANCE,
     PATH_REPLAN_COOLDOWN_SCANS,
     PATH_REPLAN_LOOKAHEAD_DISTANCE,
+    REPLAN_STRAIGHT_SPEED,
     FRONT_DETECTION_ANGLE,
     PATH_DOWNSAMPLE_STEP,
     GOAL_TOLERANCE,
@@ -85,6 +86,7 @@ class InformedRRTNavigator(Node):
         self.path = []
         self.path_index = 0
         self.need_replan = True
+        self.replan_straight_mode = False
         self.path_replan_cooldown = 0
         self.adjusted_goal_cell = None
         self.goal_reached = False
@@ -260,13 +262,11 @@ class InformedRRTNavigator(Node):
             and self.path_blocked_ahead()
         ):
             self.get_logger().warn(
-                "Current path is blocked by obstacle. Replanning."
+                "Current path is blocked by obstacle. Driving straight slowly while replanning."
             )
-            self.path = []
-            self.path_index = 0
             self.need_replan = True
+            self.replan_straight_mode = True
             self.path_replan_cooldown = PATH_REPLAN_COOLDOWN_SCANS
-            self.stop_robot()
 
     def control_loop(self):
         """Main navigation loop: stop, recover, plan, or follow the next waypoint."""
@@ -302,14 +302,23 @@ class InformedRRTNavigator(Node):
                 self.stop_robot()
                 return
 
+            if self.replan_straight_mode:
+                self.publish_replan_straight_cmd()
+
             success = self.plan_path()
 
             if not success:
-                self.get_logger().warn("No path found. Robot stopped.")
-                self.stop_robot()
+                if self.replan_straight_mode:
+                    self.get_logger().warn(
+                        "No new path found yet. Continuing straight slowly."
+                    )
+                else:
+                    self.get_logger().warn("No path found. Robot stopped.")
+                    self.stop_robot()
                 return
 
             self.need_replan = False
+            self.replan_straight_mode = False
 
         if not self.path:
             self.stop_robot()
@@ -329,6 +338,7 @@ class InformedRRTNavigator(Node):
             self.path = []
             self.path_index = 0
             self.need_replan = True
+            self.replan_straight_mode = False
             self.stop_robot()
             return
 
@@ -361,6 +371,7 @@ class InformedRRTNavigator(Node):
         self.recovery_state = "BACKUP"
         self.recovery_counter = 0
         self.need_replan = True
+        self.replan_straight_mode = False
 
         # Mark the blocked area before replanning so the next path avoids it.
         self.block_front_danger_zone()
@@ -464,6 +475,8 @@ class InformedRRTNavigator(Node):
 
     def plan_path(self):
         """Plan a new path from the robot's current cell to the goal cell."""
+        start_x = self.robot_x
+        start_y = self.robot_y
         start_cell = self.grid.world_to_grid(self.robot_x, self.robot_y)
         requested_goal_cell = self.grid.world_to_grid(self.goal_x, self.goal_y)
 
@@ -533,11 +546,16 @@ class InformedRRTNavigator(Node):
 
         step = max(1, PATH_DOWNSAMPLE_STEP)
 
-        self.path = self.downsample_path(
+        planned_path = self.downsample_path(
             world_path,
             step=step
         )
 
+        if len(planned_path) == 0:
+            return False
+
+        planned_path[0] = (start_x, start_y)
+        self.path = planned_path
         self.path_index = 0
 
         self.get_logger().info(
@@ -545,6 +563,13 @@ class InformedRRTNavigator(Node):
         )
 
         return True
+
+    def publish_replan_straight_cmd(self):
+        """Creep straight while a blocked original path is being replanned."""
+        cmd = Twist()
+        cmd.linear.x = REPLAN_STRAIGHT_SPEED
+        cmd.angular.z = 0.0
+        self.cmd_pub.publish(cmd)
 
     def clear_cell_radius(self, center_cell, radius_cells=3):
         """Clear a small circle in the grid so the robot can plan from its own cell."""
@@ -905,6 +930,7 @@ class InformedRRTNavigator(Node):
         self.goal_reached = True
         self.recovery_mode = False
         self.need_replan = False
+        self.replan_straight_mode = False
 
         for _ in range(10):
             self.stop_robot()
@@ -931,6 +957,7 @@ class InformedRRTNavigator(Node):
         self.path = []
         self.path_index = 0
         self.need_replan = False
+        self.replan_straight_mode = False
 
         for _ in range(50):
             self.stop_robot()
